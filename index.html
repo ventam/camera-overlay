@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Overlay">
+<meta name="theme-color" content="#0b0d0c">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>Camera Overlay</title>
+<style>
+  :root{--bg:#0b0d0c;--panel:rgba(16,19,18,.86);--fg:#eef2ef;--muted:#9aa5a0;--accent:#7fd1b9;--c-op:#c4b5fd;--c-cam:#ffb86b;--c-ov:#7fd1b9;color-scheme:dark}
+  [hidden]{display:none!important}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.3 system-ui,-apple-system,sans-serif;overflow:hidden;touch-action:none}
+  #stage{position:fixed;inset:0;overflow:hidden}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  #ovw{position:absolute;left:50%;top:50%;transform-origin:center;pointer-events:none}
+  #ov{display:block;width:100%;height:100%;user-select:none}
+  #ov:not([src]){visibility:hidden}
+  /* Visibility styles: contrast is a CSS filter; outline swaps in an edge-detected image */
+  #ov.contrast,#ref.contrast{filter:grayscale(1) contrast(2.2)}
+  /* Reference points: drawn in image coordinates, sized per view so they stay the same on screen */
+  .pts{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+  .pts .seg{fill:none}
+  .pts .segs{stroke:rgba(0,0,0,.65);fill:none}
+  .pts .dot{stroke:#111}
+  .pts .circ{fill:none;stroke:#fff}
+  .pts .circs{fill:none;stroke:rgba(0,0,0,.65)}
+  .pts .handle{fill:#fff;stroke:#111}
+  .pts text{fill:#fff;stroke:rgba(0,0,0,.8);paint-order:stroke;font-family:system-ui,-apple-system,sans-serif;font-weight:600}
+  #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:var(--bg);z-index:5}
+  #start h1{font-size:22px;margin:0}
+  #start p{color:var(--muted);margin:0;max-width:30ch}
+  #bar{position:fixed;left:0;right:0;bottom:0;z-index:4;background:var(--panel);backdrop-filter:blur(8px);
+       padding:10px max(12px,env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));
+       display:flex;flex-direction:column;gap:10px}
+  .row{display:flex;gap:8px;align-items:center}
+  .row label{font-size:12px;color:var(--muted);width:76px;flex:none;text-transform:uppercase;letter-spacing:.04em}
+  input[type=range]{flex:1;accent-color:var(--accent)}
+  button,.btn{flex:1;min-height:42px;border:1px solid #2c3431;background:#1a1f1d;color:var(--fg);border-radius:10px;font:inherit;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  button.on{background:var(--accent);color:#08110e;border-color:var(--accent)}
+  .big{flex:none;padding:0 22px;background:var(--accent);color:#08110e;border:0}
+  input[type=file]{display:none}
+  #hint{position:fixed;top:calc(12px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:4;background:var(--panel);padding:6px 12px;border-radius:999px;font-size:13px;color:var(--muted)}
+  #err{color:#ff9b8a;max-width:32ch}
+  #grid{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+  #grid *{vector-effect:non-scaling-stroke;fill:none}
+  #grid .sh{stroke:rgba(0,0,0,.6);stroke-width:3}
+  #grid .ln{stroke:#fff;stroke-width:1}
+  #grid .c{stroke:var(--accent);stroke-dasharray:6 6}
+  .row button,.row .btn{min-width:0;padding:0 4px;font-size:13px;white-space:nowrap}
+  .row label.btn{width:auto;flex:1;text-transform:none;letter-spacing:0;color:var(--fg);font-size:13px}
+  @media (max-width:340px){.row button,.row label.btn{font-size:12px}}
+  .zooms button{font-size:13px}
+  .zooms{justify-content:center;gap:6px}
+  .zooms button{flex:none;width:40px;min-height:34px;border-radius:999px;font-size:13px;padding:0}
+  .zooms button:disabled{opacity:.3}
+  /* Image only: the original image shown straight as a reference; overlay adjustments are kept */
+  #ref{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:var(--bg);z-index:6;display:none}
+  body.solo #ref{display:block}
+  body.solo #bar,body.solo #hint,body.solo #vs,body.solo #tools,body.solo #views,body.solo #menu,body.solo #more{display:none!important}
+  /* Image only has its own zoom and pan, never the overlay's rotation or tilt */
+  #ref{transform-origin:center;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;-webkit-touch-callout:none}
+  /* Image only toolbar: fit to screen (when zoomed) and reference point editing */
+  #refbar{position:fixed;z-index:8;top:calc(12px + env(safe-area-inset-top));left:max(12px,env(safe-area-inset-left));display:none;gap:8px;flex-wrap:wrap;
+          max-width:calc(100vw - 24px)}
+  body.vsleft #refbar{left:auto;right:max(12px,env(safe-area-inset-right));justify-content:flex-end}
+  body.btnbottom #refbar{top:auto;bottom:calc(env(safe-area-inset-bottom) + 12px)}
+  body.solo #refbar{display:flex}
+  #refbar button{flex:none;min-height:48px;padding:0 16px;border-radius:999px;font-size:15px;background:var(--panel);backdrop-filter:blur(8px)}
+  #refbar button.on{background:#ffd84d;color:#111;border-color:#ffd84d}
+  #refbar button:disabled{opacity:.4}
+  body:not(.refzoomed) #reffit{display:none}
+  /* Show/hide marks in image only mode; while editing they are always shown */
+  body.ptsedit #refmarks{display:none}
+  body:not(.ptsedit) #ptsnew,body:not(.ptsedit) #ptsundo,body:not(.ptsedit) #ptsdel,body:not(.ptsedit) #tooltog{display:none}
+  /* Delete mode: only deleting is possible; Clear (delete all) is offered only here */
+  body:not(.ptsdel) #ptsclear,body.ptsdel #tooltog,body.ptsdel #ptsnew{display:none}
+  #refbar #ptsdel.on,#refbar #ptsclear{background:#e5484d;color:#fff;border-color:#e5484d}
+  body.toolcircle #ptsnew{display:none}
+  /* Crop screen: the full original image with a movable, resizable crop box */
+  #crop{position:fixed;inset:0;z-index:20;background:#000;display:flex;flex-direction:column}
+  #cropstage{position:relative;overflow:hidden;flex:1;margin:calc(12px + env(safe-area-inset-top)) 16px 8px;display:flex;align-items:center;justify-content:center;touch-action:none;user-select:none;-webkit-user-select:none}
+  #cropimg{display:block;max-width:100%;max-height:100%;pointer-events:none;-webkit-user-drag:none}
+  #cropbox{position:absolute;border:2px solid #fff;box-shadow:0 0 0 9999px rgba(0,0,0,.6);pointer-events:none}
+  #cropbox i{position:absolute;width:26px;height:26px;border:4px solid #fff}
+  #cropbox .tl{left:-6px;top:-6px;border-right:0;border-bottom:0}
+  #cropbox .tr{right:-6px;top:-6px;border-left:0;border-bottom:0}
+  #cropbox .bl{left:-6px;bottom:-6px;border-right:0;border-top:0}
+  #cropbox .br{right:-6px;bottom:-6px;border-left:0;border-top:0}
+  #cropbar{position:relative;z-index:1;display:flex;gap:8px;padding:8px 16px calc(14px + env(safe-area-inset-bottom))}
+  #cropbar button{flex:1;min-height:52px;font-size:16px;border-radius:12px}
+  #cropbar .primary{background:var(--accent);color:#08110e;border-color:var(--accent);font-weight:600}
+  #ptsref{position:fixed;inset:0;width:100%;height:100%;z-index:7;display:none;transform-origin:center;pointer-events:none}
+  body.solo #ptsref{display:block}
+  body.novs #vs,body.novs #bar,body.novs #menu{display:none!important}
+  /* Two button groups: the view toggles (overlay, image only) are big, in the top corner above the slider;
+     the tools (menu, flashlight, grid, lock, slider) form a column in the opposite corner.
+     --sb = tool button size, --bb = view toggle size */
+  :root{--sb:48px;--bb:66px;
+        --rowtop:calc(12px + env(safe-area-inset-top));--rowbot:calc(max(var(--barh,0px),env(safe-area-inset-bottom)) + 12px)}
+  #tools,#views{position:fixed;top:var(--rowtop);z-index:4;display:flex;gap:8px}
+  #tools{left:max(12px,env(safe-area-inset-left));flex-direction:column}
+  #views{right:max(12px,env(safe-area-inset-right))}
+  body.vsleft #tools{left:auto;right:max(12px,env(safe-area-inset-right))}
+  body.vsleft #views{right:auto;left:max(12px,env(safe-area-inset-left))}
+  /* Buttons at the bottom (setting), above the zoom presets */
+  body.btnbottom #tools,body.btnbottom #views{top:auto;bottom:var(--rowbot)}
+  body.btnbottom #tools{flex-direction:column-reverse}
+  /* Extra space between tool subgroups: menu | grid, flashlight | lock */
+  #tools .gs{margin-top:16px}
+  body.btnbottom #tools .gs{margin-top:0;margin-bottom:16px}
+  .btngroup button{flex:none;width:var(--sb);height:var(--sb);min-height:0;padding:0;border-radius:999px;font-size:calc(var(--sb)*.48);
+                   background:var(--panel);backdrop-filter:blur(8px);border-color:rgba(255,255,255,.12)}
+  .btngroup button.on{background:var(--accent);color:#08110e;border-color:var(--accent)}
+  #views{align-items:center}
+  #views button{width:var(--bb);height:var(--bb);font-size:calc(var(--bb)*.5)}
+  #views .primary{border:2px solid var(--accent)}
+  #hint{top:calc(var(--rowtop) + var(--bb) + 10px)!important;max-width:calc(100vw - 150px)}
+  body.btnbottom #hint{top:var(--rowtop)!important}
+  #vs{position:fixed;right:max(10px,env(safe-area-inset-right));top:calc(var(--rowtop) + var(--bb) + 10px);bottom:var(--rowbot);
+      width:56px;z-index:4;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0;
+      background:var(--panel);backdrop-filter:blur(8px);border-radius:28px}
+  body.btnbottom #vs{top:var(--rowtop);bottom:calc(var(--rowbot) + var(--bb) + 10px)}
+  #menu{position:fixed;z-index:5;top:calc(var(--rowtop) + var(--bb) + 10px);right:calc(max(10px,env(safe-area-inset-right)) + 64px);
+        width:min(214px,calc(100vw - 92px));max-height:calc(100dvh - var(--rowtop) - var(--bb) - 20px);overflow-y:auto;display:flex;flex-direction:column;gap:5px;padding:9px;background:var(--panel);backdrop-filter:blur(10px);border-radius:16px;
+        box-shadow:0 4px 18px rgba(0,0,0,.4)}
+  body.vsleft #menu{right:auto;left:calc(max(10px,env(safe-area-inset-left)) + 64px)}
+  body.btnbottom #menu{top:var(--rowtop)}
+  /* The ⋯ menu opens beside the tool column */
+  #more{position:fixed;z-index:5;top:var(--rowtop);left:calc(max(12px,env(safe-area-inset-left)) + var(--sb) + 8px);
+        width:min(240px,calc(100vw - 92px));display:flex;flex-direction:column;padding:10px;background:var(--panel);backdrop-filter:blur(10px);border-radius:16px;
+        box-shadow:0 4px 18px rgba(0,0,0,.4)}
+  body.vsleft #more{left:auto;right:calc(max(12px,env(safe-area-inset-right)) + var(--sb) + 8px)}
+  body.btnbottom #more{top:auto;bottom:var(--rowbot)}
+  #mmain,#msettings{display:flex;flex-direction:column;gap:8px}
+  #more button{flex:none;min-height:54px;justify-content:flex-start;padding:0 16px;font-size:17px;border-radius:12px}
+  #more .danger{color:#ff8a8a}
+  #more .back{color:var(--muted);border-color:transparent;background:none}
+  /* Line icons (inline SVG): color follows the button state */
+  .ic{width:52%;height:52%;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+  #vslock .ic,#menu .glock .ic{width:22px;height:22px}
+  #menu .mh{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:6px 6px 2px}
+  #menu button{flex:none;min-height:46px;justify-content:flex-start;padding:0 14px;font-size:16px}
+  #mparams{display:flex;flex-direction:column;gap:5px}
+  #menu .sep{height:1px;background:rgba(255,255,255,.12);margin:4px 2px}
+  #menu button:disabled,.zooms button:disabled{opacity:.35}
+  body.vsleft #vs{right:auto;left:max(10px,env(safe-area-inset-left))}
+  #vsmenu{flex:none;width:52px;min-height:44px;padding:2px 0;border-radius:14px;flex-direction:column;gap:0;font-size:10px;letter-spacing:-.01em;white-space:nowrap;line-height:1.15;text-align:center}
+  #vsmenu.on{background:#2c3431}
+  #vsval{font-size:13px;font-variant-numeric:tabular-nums;min-height:17px}
+  #vstrack{position:relative;flex:1;width:100%;touch-action:none;cursor:ns-resize}
+  #vstrack::before{content:'';position:absolute;left:50%;top:14px;bottom:14px;width:4px;margin-left:-2px;background:#2c3431;border-radius:2px}
+  /* Slider color by group: opacity, camera, overlay image */
+  .g-op{--gc:var(--c-op)} .g-cam{--gc:var(--c-cam)} .g-ov{--gc:var(--c-ov)}
+  #vsfill{position:absolute;left:50%;width:4px;margin-left:-2px;background:var(--gc);border-radius:2px}
+  #vszero{position:absolute;left:50%;width:20px;height:2px;margin:-1px 0 0 -10px;background:var(--muted)}
+  #vsthumb{position:absolute;left:50%;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;background:var(--gc);box-shadow:0 1px 5px rgba(0,0,0,.5)}
+  #vs0,#vslock{flex:none;width:44px;min-height:32px;font-size:12px;padding:0}
+  #vslock{font-size:16px}
+  #vs{border:2px solid var(--gc)}
+  #vsname{color:var(--gc)}
+  /* A locked group: the slider cannot be dragged */
+  #vs.locked #vstrack{opacity:.3;cursor:not-allowed}
+  #vs.locked #vslock{background:var(--gc);color:#08110e;border-color:var(--gc)}
+  #menu [data-p],#menu #flip,#menu #linecol{border-left:4px solid var(--gc)}
+  #stylesel{display:flex;gap:4px}
+  #menu #stylesel button{flex:1;min-height:40px;padding:0;justify-content:center;font-size:13px;border-color:rgba(255,255,255,.12)}
+  #menu #stylesel button.on{background:var(--gc);color:#08110e;border-color:var(--gc)}
+  #menu [data-p].on{background:var(--gc);color:#08110e;border-color:var(--gc)}
+  #menu .mh{display:flex;align-items:center;justify-content:space-between;color:var(--gc)}
+  #menu .glock{width:46px;min-height:38px;padding:0;justify-content:center;font-size:16px}
+  #menu .glock.on{background:var(--gc);border-color:var(--gc)}
+  .zooms button.on{background:var(--c-cam);border-color:var(--c-cam)}
+  /* Phone in landscape: the slider runs horizontally along the bottom, between the tool column and the view toggles */
+  @media (orientation:landscape) and (max-height:520px){
+    #vs{top:auto;bottom:var(--rowbot);left:calc(max(12px,env(safe-area-inset-left)) + var(--sb) + 14px);right:max(12px,env(safe-area-inset-right));
+        width:auto;height:60px;flex-direction:row;padding:0 10px;gap:8px}
+    body.vsleft #vs{left:max(12px,env(safe-area-inset-left));right:calc(max(12px,env(safe-area-inset-right)) + var(--sb) + 14px)}
+    body.btnbottom #vs{top:auto;bottom:var(--rowbot);right:calc(max(12px,env(safe-area-inset-right)) + 3 * var(--bb) + 30px)}
+    body.btnbottom.vsleft #vs{left:calc(max(12px,env(safe-area-inset-left)) + 3 * var(--bb) + 30px);right:calc(max(12px,env(safe-area-inset-right)) + var(--sb) + 14px)}
+    #vsval{min-width:46px;text-align:center}
+    #vstrack{width:auto;height:100%;cursor:ew-resize}
+    #vstrack::before{left:14px;right:14px;top:50%;bottom:auto;width:auto;height:4px;margin:-2px 0 0}
+    #vsfill{top:50%;width:auto;height:4px;margin:-2px 0 0}
+    #vszero{top:50%;width:2px;height:20px;margin:-10px 0 0 -1px}
+    #vsthumb{top:50%}
+    /* The adjustment menu opens above the slider */
+    #menu,body.btnbottom #menu{top:auto;bottom:calc(var(--rowbot) + 68px);left:calc(max(12px,env(safe-area-inset-left)) + var(--sb) + 14px);right:auto;
+          max-height:calc(100dvh - var(--rowbot) - 80px - env(safe-area-inset-top))}
+    body.vsleft #menu{left:max(12px,env(safe-area-inset-left))}
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="v" playsinline autoplay muted></video>
+  <div id="ovw">
+    <img id="ov" alt="">
+    <svg id="grid" hidden aria-hidden="true" viewBox="0 0 100 100" preserveAspectRatio="none">
+      <g class="sh"><rect x="0" y="0" width="100" height="100"/><line x1="33.333" y1="0" x2="33.333" y2="100"/><line x1="0" y1="33.333" x2="100" y2="33.333"/><line x1="66.667" y1="0" x2="66.667" y2="100"/><line x1="0" y1="66.667" x2="100" y2="66.667"/><line x1="50" y1="0" x2="50" y2="100"/><line x1="0" y1="50" x2="100" y2="50"/></g>
+      <g class="ln"><rect x="0" y="0" width="100" height="100"/><line x1="33.333" y1="0" x2="33.333" y2="100"/><line x1="0" y1="33.333" x2="100" y2="33.333"/><line x1="66.667" y1="0" x2="66.667" y2="100"/><line x1="0" y1="66.667" x2="100" y2="66.667"/></g>
+      <g class="ln c"><line x1="50" y1="0" x2="50" y2="100"/><line x1="0" y1="50" x2="100" y2="50"/></g>
+    </svg>
+    <svg id="ptsov" class="pts" hidden aria-hidden="true"></svg>
+  </div>
+</div>
+
+<div id="start">
+  <h1>Camera Overlay</h1>
+  <p>Pick an image to show semi-transparently on top of the camera view.</p>
+  <button class="big" id="go">Start camera</button>
+  <p id="err"></p>
+</div>
+
+<img id="ref" alt="" draggable="false">
+<svg id="ptsref" class="pts" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
+<div id="refbar">
+  <button id="reffit">⤢ Fit</button>
+  <button id="cropb">✂ Crop</button>
+  <button id="refstyle">Style: Normal</button>
+  <button id="refmarks" class="on" aria-pressed="true">◉ Marks + ratios</button>
+  <button id="ptsedit">✎ Edit</button>
+  <button id="tooltog">• Points</button>
+  <button id="ptsnew">+ Chain</button>
+  <button id="ptsundo">Undo</button>
+  <button id="ptsdel" aria-pressed="false">🗑 Delete</button>
+  <button id="ptsclear">Clear all</button>
+</div>
+
+<!-- Tool buttons: a column in the corner opposite the slider, in subgroups (.gs starts a subgroup): menu | grid, points, flashlight | lock -->
+<div id="tools" class="btngroup" hidden>
+  <button id="moreb" aria-label="Menu" aria-haspopup="menu" aria-expanded="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/></svg></button>
+  <button id="gridb" class="gs" aria-label="Grid lines on/off" title="Grid lines" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17"/></svg></button>
+  <button id="ptsb" aria-label="Reference points on/off" title="Points" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m6.2 16 4.6-8.3M13.4 7.5l4.4 6.6"/><circle cx="5" cy="18" r="2.2"/><circle cx="12" cy="5.5" r="2.2"/><circle cx="19" cy="16" r="2.2"/></svg></button>
+  <button id="torchb" hidden aria-label="Flashlight on/off" title="Flashlight" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2.5 5 13.5h6l-1 8 8-11h-6l1-8z"/></svg></button>
+  <button id="lock" class="gs" aria-label="Lock image" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 7.6-1.7"/></svg></button>
+</div>
+<!-- Big toggles in the corner above the slider: slider, overlay, image only -->
+<div id="views" class="btngroup" hidden>
+  <button id="vshide" class="on" aria-label="Show/hide slider" title="Slider" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v18M12 3v18M18 3v18"/><circle cx="6" cy="8" r="2.2" fill="currentColor"/><circle cx="12" cy="15" r="2.2" fill="currentColor"/><circle cx="18" cy="10" r="2.2" fill="currentColor"/></svg></button>
+  <button id="ovb" class="on" aria-label="Overlay on/off" title="Overlay" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 8 12 13l9.5-5L12 3z"/><path d="m2.5 12.5 9.5 5 9.5-5"/><path d="m2.5 16.5 9.5 5 9.5-5" opacity=".5"/></svg></button>
+  <button id="solob" class="primary" aria-label="Image only" title="Image only"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.8"/><path d="m21 16-5-5-9 9"/></svg></button>
+</div>
+
+<div id="hint" hidden>Drag = move · pinch = size and rotation</div>
+
+<!-- Bottom bar: camera zoom presets, shown only while the zoom setting is selected -->
+<div id="bar" hidden>
+  <div class="row zooms" id="zooms"></div>
+</div>
+<input id="file" type="file" accept="image/*">
+<!-- Crop: opens after choosing an image and from image only mode -->
+<div id="crop" hidden>
+  <div id="cropstage"><img id="cropimg" alt="" draggable="false"><div id="cropbox"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div></div>
+  <div id="cropbar"><button id="cropcancel">Cancel</button><button id="cropfull">Full image</button><button id="cropdone" class="primary">Done</button></div>
+</div>
+
+<!-- Vertical slider for the selected adjustment; the button at its top opens the adjustment menu -->
+<div id="vs" hidden>
+  <button id="vsmenu" aria-haspopup="menu" aria-expanded="false"><span id="vsname"></span><span>▾</span></button>
+  <div id="vsval"></div>
+  <div id="vstrack"><div id="vsfill"></div><div id="vszero"></div><div id="vsthumb"></div></div>
+  <button id="vs0">0°</button>
+  <button id="vslock" aria-label="Lock this group" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 7.6-1.7"/></svg></button>
+</div>
+<div id="menu" hidden role="menu">
+  <div id="mparams">
+    <div class="mh g-op"><span>Visibility</span></div>
+    <button data-p="op" class="g-op" role="menuitemradio">Opacity</button>
+    <div id="stylesel" class="g-op" role="radiogroup" aria-label="Image style">
+      <button data-st="normal">Normal</button><button data-st="contrast">Contrast</button><button data-st="outline">Outline</button>
+    </div>
+    <button data-p="edge" class="g-op" role="menuitemradio">Outline detail</button>
+    <button id="linecol" class="g-op">Line color: Dark</button>
+    <div class="mh g-cam"><span>Camera</span><button class="glock" data-g="cam" aria-label="Lock camera" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 7.6-1.7"/></svg></button></div>
+    <button data-p="zoom" class="g-cam" role="menuitemradio">Zoom</button>
+    <div class="mh g-ov"><span>Overlay image</span><button class="glock" data-g="ov" aria-label="Lock overlay image" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 7.6-1.7"/></svg></button></div>
+    <button data-p="scale" class="g-ov" role="menuitemradio">Size</button>
+    <button data-p="rot" class="g-ov" role="menuitemradio">Rotate</button>
+    <button data-p="tx" class="g-ov" role="menuitemradio">Tilt ↕</button>
+    <button data-p="ty" class="g-ov" role="menuitemradio">Tilt ↔</button>
+    <button id="flip" class="g-ov">Mirror image</button>
+  </div>
+</div>
+<!-- ⋯ menu: pick image and settings -->
+<div id="more" hidden role="menu">
+  <div id="mmain">
+    <button id="pickimg">Choose image</button>
+    <button id="camb">Close camera</button>
+    <button id="opensettings">Settings ›</button>
+  </div>
+  <div id="msettings" hidden>
+    <button id="mback" class="back">‹ Settings</button>
+    <button id="sideb">Slider on left</button>
+    <button id="btnposb">Buttons at bottom</button>
+    <button id="clearall" class="danger">Clear all…</button>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const v=$('v'),ov=$('ov'),ovw=$('ovw'),grid=$('grid');
+// Size of the image frame; without an image the grid gets a screen-sized frame
+function setFrame(w,h){ovw.style.width=w+'px';ovw.style.height=h+'px'}
+setFrame(innerWidth*.8,innerHeight*.6);
+const s={x:0,y:0,scale:1,rot:0,tx:0,ty:0,flip:1,lockCam:false,lockOv:false,facing:'environment',zoom:1};
+let stream,track,curDev=null,devs=[];
+const ZOOMS=[0.5,1,2,3,5];
+
+function draw(){
+  ovw.style.transform=`translate(-50%,-50%) translate(${s.x}px,${s.y}px) perspective(${Math.max(innerWidth,innerHeight)}px) rotateX(${s.tx}deg) rotateY(${s.ty}deg) rotate(${s.rot}deg) scale(${s.scale*s.flip},${s.scale})`;
+  save();refreshVS();drawPts();
+}
+// Persistence: image and settings in IndexedDB, restored on the next start
+const KEYS=['x','y','scale','rot','tx','ty','flip','zoom','op','side','param','btnpos','rz','rx','ry','lockCam','lockOv','style','rstyle','edge','line','chains','chain','circles','showPts','refPts','ratios','fv','crop'];
+// Visibility style and reference points (normalized image coordinates)
+s.style='normal';s.rstyle='normal';s.edge=40;s.line='dark';s.chains=[];s.chain=0;s.circles=[];s.showPts=false;s.refPts=true;s.ratios=true;
+// Image only view: own zoom and pan
+s.rz=1;s.rx=0;s.ry=0;
+s.side='right';s.param='op';s.btnpos='top';
+s.op=.5;
+// fv: frame version. 1 = s.scale is relative to the downsized frame (FW×FH), not the original image size
+s.fv=1;let scaleFix=false;
+// Crop of the original image, normalized [x, y, w, h]; the original stays stored so the crop can be changed later
+s.crop=[0,0,1,1];
+function idb(mode,fn){
+  return new Promise((res,rej)=>{
+    // Database name kept from the original Finnish version so existing saved data still loads
+    const o=indexedDB.open('kamera-overlay',1);
+    o.onupgradeneeded=()=>o.result.createObjectStore('kv');
+    o.onerror=()=>rej(o.error);
+    o.onsuccess=()=>{const tx=o.result.transaction('kv',mode),q=fn(tx.objectStore('kv'));
+      tx.oncomplete=()=>res(q.result);tx.onerror=()=>rej(tx.error)};
+  });
+}
+let saveT;
+function save(){
+  clearTimeout(saveT);
+  saveT=setTimeout(()=>{const o={};for(const k of KEYS)o[k]=s[k];idb('readwrite',st=>st.put(o,'state')).catch(()=>{})},300);
+}
+async function loadState(){
+  try{
+    const o=await idb('readonly',st=>st.get('state'));if(!o)return;
+    for(const k of KEYS)if(k in o)s[k]=o[k];
+    // Older versions sized the frame to the full image; convert the saved scale once the image is loaded
+    if(!('fv' in o)){scaleFix=true;s.fv=1}
+    // Older versions saved a single chain of points
+    if(!o.chains&&o.pts?.length){s.chains=[o.pts];s.chain=0}
+  }catch(e){}
+}
+// The original image is kept separately; the overlay shows it or a processed (outline) version of it
+// Memory: phone photos are often 12 MP (about 48 MB decoded each time they are shown), and a 3D-transformed
+// element is rendered as a layer of its full layout size. iOS reloads the page when it runs out of memory,
+// so the working image is capped at MAXPX and the overlay frame at FRAME CSS pixels; s.scale is relative to the frame.
+const MAXPX=2400,FRAME=800;
+let origURL=null,srcImg=null,IW=0,IH=0,FW=0,FH=0;
+function loadImg(url){return new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=rej;im.src=url})}
+let origBlob=null;
+async function showImage(blob,fit){
+  origBlob=blob;
+  let url=URL.createObjectURL(blob),im;
+  try{im=await loadImg(url)}catch(e){URL.revokeObjectURL(url);return}
+  const[cx,cy,cw,ch]=s.crop,full=cx<=0&&cy<=0&&cw>=1&&ch>=1;
+  const sx=cx*im.naturalWidth,sy=cy*im.naturalHeight,sw=cw*im.naturalWidth,sh=ch*im.naturalHeight;
+  const ow=sw,big=Math.max(sw,sh);
+  if(big>MAXPX||!full){
+    const k=Math.min(1,MAXPX/big),c=document.createElement('canvas');
+    c.width=Math.max(1,Math.round(sw*k));c.height=Math.max(1,Math.round(sh*k));
+    c.getContext('2d').drawImage(im,sx,sy,sw,sh,0,0,c.width,c.height);
+    const small=await new Promise(r=>c.toBlob(r,'image/jpeg',.92));
+    c.width=c.height=0;
+    if(small){URL.revokeObjectURL(url);url=URL.createObjectURL(small);im=await loadImg(url)}
+  }
+  if(origURL)URL.revokeObjectURL(origURL);
+  origURL=url;srcImg=im;IW=im.naturalWidth;IH=im.naturalHeight;refOutlineStale=true;
+  const k=Math.min(1,FRAME/Math.max(IW,IH));FW=IW*k;FH=IH*k;
+  setFrame(FW,FH);$('ptsov').setAttribute('viewBox',`0 0 ${IW} ${IH}`);$('ptsref').setAttribute('viewBox',`0 0 ${IW} ${IH}`);
+  ov.src=origURL;$('ref').src=origURL;
+  if(scaleFix&&!fit){s.scale*=ow/FW;scaleFix=false}
+  if(fit)fitImage();else draw();
+  applyStyle();
+}
+async function loadImage(){
+  try{
+    const blob=await idb('readonly',st=>st.get('img'));if(!blob)return false;
+    showImage(blob,false);return true;
+  }catch(e){return false}
+}
+function syncUI(){
+  ov.style.opacity=s.op;
+  drawRef();syncStyleUI();
+  $('ptsov').toggleAttribute('hidden',!s.showPts);$('ptsb').classList.toggle('on',s.showPts);$('ptsb').setAttribute('aria-pressed',s.showPts);
+  $('flip').classList.toggle('on',s.flip<0);
+  syncLocks();
+  document.body.classList.toggle('vsleft',s.side==='left');
+  $('sideb').textContent=s.side==='left'?'Slider on right':'Slider on left';
+  document.body.classList.toggle('btnbottom',s.btnpos==='bottom');
+  $('btnposb').textContent=s.btnpos==='bottom'?'Buttons at top':'Buttons at bottom';
+}
+
+function fitImage(){
+  const w=innerWidth*0.8/FW,h=innerHeight*0.6/FH;
+  s.scale=Math.min(w,h);s.x=0;s.y=0;s.rot=0;s.tx=0;s.ty=0;draw();
+}
+
+// Lenses: on iPhone each back camera is its own device (ultra wide, wide, tele).
+// Labels may be localized, so Finnish variants are matched too.
+const isUltra=d=>/ultra/i.test(d.label);
+const isFront=d=>/front|etu|user/i.test(d.label);
+function pickDevice(){
+  if(s.facing==='user')return null;
+  const back=devs.filter(d=>!isFront(d));
+  if(s.zoom<1){const u=back.find(isUltra);if(u)return u}
+  return back.find(d=>!isUltra(d)&&!/tele|dual|triple|kaksois|kolmois/i.test(d.label))||null;
+}
+async function openCam(dev){
+  if(stream)stream.getTracks().forEach(t=>t.stop());
+  const video={width:{ideal:1920},height:{ideal:1080}};
+  if(dev)video.deviceId={exact:dev.deviceId};else video.facingMode=s.facing;
+  stream=await navigator.mediaDevices.getUserMedia({video,audio:false});
+  track=stream.getVideoTracks()[0];curDev=dev;
+  v.srcObject=stream;
+  try{await v.play()}catch(e){}
+  await syncTorch();
+}
+// Flashlight: shown only when the current camera supports torch; reapplied after the camera is reopened
+s.torch=false;
+async function syncTorch(){
+  const ok=!!track?.getCapabilities?.().torch,b=$('torchb');
+  b.hidden=!ok;
+  if(ok&&s.torch){try{await track.applyConstraints({advanced:[{torch:true}]})}catch(e){s.torch=false}}
+  b.classList.toggle('on',ok&&s.torch);b.setAttribute('aria-pressed',ok&&s.torch);
+}
+$('torchb').onclick=async()=>{
+  s.torch=!s.torch;
+  try{await track.applyConstraints({advanced:[{torch:s.torch}]})}catch(e){s.torch=false}
+  syncTorch();
+};
+async function startCam(){
+  await openCam(null);
+  try{devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput')}catch(e){}
+  buildZooms();
+  await setZoom(s.zoom,true);
+}
+// Zoom: switch lens if needed, then hardware zoom, the rest digitally
+async function setZoom(z,reopen){
+  // Camera closed: just remember the zoom for when it is opened again
+  if(!stream){s.zoom=z;save();refreshVS();return}
+  s.zoom=z;save();
+  const dev=pickDevice();
+  if(reopen||dev?.deviceId!==curDev?.deviceId)await openCam(dev);
+  let f=dev&&isUltra(dev)?z/0.5:z,hw=1;
+  const c=track.getCapabilities?.().zoom;
+  if(c){hw=Math.min(Math.max(f,c.min),c.max);try{await track.applyConstraints({advanced:[{zoom:hw}]})}catch(e){hw=1}}
+  const digital=Math.max(1,f/hw);
+  v.style.transform=(s.facing==='user'?'scaleX(-1) ':'')+`scale(${digital})`;
+  refreshVS();
+  for(const b of $('zooms').children)b.classList.toggle('on',+b.dataset.z===z);
+}
+function minZoom(){
+  if(s.facing==='environment'&&devs.some(d=>!isFront(d)&&isUltra(d)))return 0.5;
+  return Math.min(1,track?.getCapabilities?.().zoom?.min??1);
+}
+function buildZooms(){
+  const box=$('zooms'),mn=minZoom();box.innerHTML='';
+  if(s.zoom<mn)s.zoom=1;
+  for(const z of ZOOMS){
+    if(z<mn)continue;
+    const b=document.createElement('button');b.dataset.z=z;b.textContent=(z<1?'.5':z)+'×';
+    b.onclick=()=>setZoom(z);b.disabled=s.lockCam;box.append(b);
+  }
+}
+
+let starting=false;
+$('go').onclick=async()=>{
+  // Guard against a tap on Start while the automatic start is still running (it would open the camera twice)
+  if(starting||stream)return;starting=true;
+  try{
+    if(!navigator.mediaDevices?.getUserMedia) throw new Error('This browser cannot use the camera here. Open the page over https.');
+    await loadState();syncUI();
+    await startCam();
+    $('start').hidden=true;$('tools').hidden=false;$('views').hidden=false;vs.hidden=false;pick(s.param);$('hint').hidden=false;
+    setTimeout(()=>$('hint').hidden=true,4000);
+    try{await navigator.wakeLock?.request('screen')}catch(e){}
+    if(!await loadImage())$('file').click();
+  }catch(e){$('err').textContent='Camera did not start: '+(e.message||e.name)}
+  finally{starting=false}
+};
+
+$('file').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  // Points belong to the previous image
+  s.chains=[];s.chain=0;s.circles=[];s.crop=[0,0,1,1];
+  showImage(f,true);
+  idb('readwrite',st=>st.put(f,'img')).catch(()=>{});
+  setOverlay(true);
+  openCrop(true);
+};
+ov.style.opacity=.5;
+// Overlay on/off: settings are kept, one tap switches to the plain camera view
+function setOverlay(on){ov.hidden=!on;$('ovb').classList.toggle('on',on);$('ovb').setAttribute('aria-pressed',on)}
+$('ovb').onclick=()=>setOverlay(ov.hidden);
+$('solob').onclick=()=>{if(!origURL)return $('file').click();document.body.classList.add('solo');applyRefStyle();drawPts()};
+// Image only: own zoom (pinch, wheel) and pan (drag); a tap without moving returns to the overlay
+const ref=$('ref');
+function drawRef(){
+  ref.style.transform=$('ptsref').style.transform=`translate(${s.rx}px,${s.ry}px) scale(${s.rz})`;
+  document.body.classList.toggle('refzoomed',s.rz>1.01);
+}
+function setRef(z,x,y){
+  s.rz=Math.min(10,Math.max(1,z));
+  if(s.rz<=1.01){s.rz=1;x=0;y=0}
+  s.rx=x;s.ry=y;drawRef();drawPts();save();
+}
+$('reffit').onclick=()=>setRef(1,0,0);
+const rp=new Map();let rg=null;
+function refSnap(){
+  const a=[...rp.values()],c={x:innerWidth/2,y:innerHeight/2};
+  if(a.length===1)rg={n:1,px:a[0].x,py:a[0].y,x:s.rx,y:s.ry};
+  else if(a.length>=2){const[p,q]=a;rg={n:2,d:Math.hypot(q.x-p.x,q.y-p.y),mx:(p.x+q.x)/2-c.x,my:(p.y+q.y)/2-c.y,z:s.rz,x:s.rx,y:s.ry}}
+  else rg=null;
+}
+let tap=null;
+let dragPt=null,cdrag=null;
+ref.addEventListener('pointerdown',e=>{
+  ref.setPointerCapture(e.pointerId);rp.set(e.pointerId,{x:e.clientX,y:e.clientY});refSnap();
+  tap=rp.size===1?{x:e.clientX,y:e.clientY,t:Date.now()}:null;
+  // While editing, a touch on a point grabs it; with the circle tool a touch grabs a circle handle or starts a new circle
+  const one=editing&&!delMode&&rp.size===1;
+  dragPt=one&&tool==='pts'?hitPoint(e.clientX,e.clientY):null;
+  // A second finger ends the circle being drawn; drop it if it is still too small to see
+  if(cdrag?.type==='new')dropTinyCircle(cdrag.i);
+  cdrag=one&&tool==='circle'?(hitCircle(e.clientX,e.clientY)||{type:'new',sx:e.clientX,sy:e.clientY}):null;
+});
+ref.addEventListener('pointermove',e=>{
+  if(!rp.has(e.pointerId)||!rg)return;
+  rp.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  const a=[...rp.values()];
+  if(tap&&Math.hypot(e.clientX-tap.x,e.clientY-tap.y)>8)tap=null;
+  if(dragPt!==null&&a.length===1){if(!tap){const[ci,pi]=dragPt;s.chains[ci][pi]=refToImg(e.clientX,e.clientY);drawPts()}return}
+  if(cdrag&&a.length===1){if(!tap){dragCircle(e.clientX,e.clientY);drawPts()}return}
+  if(rg.n===1&&a.length===1){if(s.rz>1)setRef(s.rz,rg.x+a[0].x-rg.px,rg.y+a[0].y-rg.py)}
+  else if(rg.n===2&&a.length>=2){
+    const[p,q]=a,z=Math.min(10,Math.max(1,rg.z*Math.hypot(q.x-p.x,q.y-p.y)/rg.d)),k=z/rg.z;
+    const mx=(p.x+q.x)/2-innerWidth/2,my=(p.y+q.y)/2-innerHeight/2;
+    setRef(z,mx-(rg.mx-rg.x)*k,my-(rg.my-rg.y)*k);
+  }
+});
+const refUp=e=>{
+  rp.delete(e.pointerId);refSnap();
+  const isTap=e.type==='pointerup'&&tap&&!rp.size&&Date.now()-tap.t<400;
+  if(editing){
+    // Delete mode: a tap removes the point, circle or chain under the finger; nothing else changes
+    // Points: tap empty space adds to the active chain, tap a point selects its chain, drag moves it
+    // Circles: drag on empty space draws one, drag its center moves it, drag its rim dot resizes it
+    if(delMode){if(isTap){deleteAt(e.clientX,e.clientY);drawPts();save()}}
+    else if(tool==='circle'){
+      if(!rp.size&&cdrag?.type==='new')dropTinyCircle(cdrag.i);
+      drawPts();save();
+    }
+    else if(isTap){tapPoint(dragPt,e.clientX,e.clientY);drawPts();save()}
+    else if(dragPt!==null&&!rp.size)save();
+  }else if(isTap)document.body.classList.remove('solo');
+  if(!rp.size){tap=null;dragPt=null;cdrag=null}
+};
+ref.addEventListener('pointerup',refUp);ref.addEventListener('pointercancel',refUp);
+ref.addEventListener('wheel',e=>{e.preventDefault();setRef(s.rz*(e.deltaY<0?1.1:0.91),s.rx,s.ry)},{passive:false});
+drawRef();
+// Visibility: normal, high contrast, or outline (edges drawn in a chosen color on a transparent background)
+const LINE={dark:[17,17,17],white:[255,255,255],red:[235,40,80]},LINENAME={dark:'Dark',white:'White',red:'Red'};
+let styleT,ovOutline=null;
+function syncStyleUI(){
+  for(const b of $('stylesel').children)b.classList.toggle('on',b.dataset.st===s.style);
+  const o=s.style==='outline';
+  document.querySelector('#menu [data-p="edge"]').hidden=!o;$('linecol').hidden=!o;
+  $('linecol').textContent='Line color: '+LINENAME[s.line];
+}
+function applyStyle(){
+  syncStyleUI();
+  ov.classList.toggle('contrast',s.style==='contrast');
+  if(!srcImg)return;
+  clearTimeout(styleT);
+  if(s.style!=='outline'){if(ov.src!==origURL)ov.src=origURL;return}
+  styleT=setTimeout(async()=>{
+    const u=await outlineURL(LINE[s.line]);if(!u)return;
+    if(ovOutline)URL.revokeObjectURL(ovOutline);ovOutline=u;
+    if(s.style==='outline')ov.src=u;
+  },80);
+}
+// Returns a blob URL of the outline image; the caller revokes the previous one
+async function outlineURL(col,bg){
+  const k=Math.min(1,1200/Math.max(IW,IH)),w=Math.round(IW*k),h=Math.round(IH*k);
+  const c=document.createElement('canvas');c.width=w;c.height=h;
+  const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(srcImg,0,0,w,h);
+  let d;try{d=g.getImageData(0,0,w,h)}catch(e){return null}
+  const p=d.data,L=new Float32Array(w*h),A=new Float32Array(w*h),[cr,cg,cb]=col,t=s.edge;
+  for(let i=0,j=0;i<L.length;i++,j+=4)L[i]=.299*p[j]+.587*p[j+1]+.114*p[j+2];
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    let a=0;
+    if(x>0&&y>0&&x<w-1&&y<h-1){
+      // Sobel gradient
+      const i=y*w+x,tl=L[i-w-1],tc=L[i-w],tr=L[i-w+1],ml=L[i-1],mr=L[i+1],bl=L[i+w-1],bc=L[i+w],br=L[i+w+1];
+      const gx=tr+2*mr+br-tl-2*ml-bl,gy=bl+2*bc+br-tl-2*tc-tr;
+      a=Math.max(0,Math.min(255,(Math.hypot(gx,gy)-t)*3));
+    }
+    A[y*w+x]=a;
+  }
+  // Thicken the lines (3×3 max) so they stay visible when the image is shown small
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    let a=0;
+    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const yy=y+dy,xx=x+dx;if(yy>=0&&yy<h&&xx>=0&&xx<w){const v=A[yy*w+xx];if(v>a)a=v}}
+    const j=(y*w+x)*4;
+    if(bg){const k=a/255;p[j]=bg[0]+(cr-bg[0])*k;p[j+1]=bg[1]+(cg-bg[1])*k;p[j+2]=bg[2]+(cb-bg[2])*k;p[j+3]=255}
+    else{p[j]=cr;p[j+1]=cg;p[j+2]=cb;p[j+3]=a}
+  }
+  g.putImageData(d,0,0);
+  const b=await new Promise(r=>c.toBlob(r,'image/png'));c.width=c.height=0;
+  return b?URL.createObjectURL(b):null;
+}
+for(const b of $('stylesel').children)b.onclick=()=>{
+  s.style=b.dataset.st;applyStyle();save();
+  if(s.style!=='outline'&&cur==='edge')pick('op');
+};
+// Image only has its own style; its outline is drawn as dark lines on white, like a sketch
+const RSTYLE={normal:'Style: Normal',contrast:'Style: Contrast',outline:'Style: Outline'};
+let refOutlineStale=true,refOutline=null;
+function applyRefStyle(){
+  $('refstyle').textContent=RSTYLE[s.rstyle];
+  ref.classList.toggle('contrast',s.rstyle==='contrast');
+  if(!srcImg)return;
+  if(s.rstyle!=='outline'){if(ref.src!==origURL)ref.src=origURL;return}
+  if(!refOutlineStale&&refOutline){ref.src=refOutline;return}
+  refOutlineStale=false;
+  outlineURL([17,17,17],[255,255,255]).then(u=>{
+    if(!u)return;if(refOutline)URL.revokeObjectURL(refOutline);refOutline=u;
+    if(s.rstyle==='outline')ref.src=u;
+  });
+}
+$('refstyle').onclick=()=>{const k=Object.keys(RSTYLE);s.rstyle=k[(k.indexOf(s.rstyle)+1)%k.length];applyRefStyle();save()};
+$('linecol').onclick=()=>{const k=Object.keys(LINE);s.line=k[(k.indexOf(s.line)+1)%k.length];applyStyle();save()};
+
+// Reference points: added in image only mode, optionally shown in the overlay; lines between them show length ratios
+let editing=false;
+function refFit(){return Math.min(innerWidth/IW,innerHeight/IH)}
+function refToImg(cx,cy){
+  const f=refFit(),ux=(cx-innerWidth/2-s.rx)/s.rz,uy=(cy-innerHeight/2-s.ry)/s.rz;
+  return [Math.min(1,Math.max(0,ux/f/IW+.5)),Math.min(1,Math.max(0,uy/f/IH+.5))];
+}
+function imgToRef([nx,ny]){
+  const f=refFit();
+  return [innerWidth/2+s.rx+s.rz*(nx-.5)*IW*f,innerHeight/2+s.ry+s.rz*(ny-.5)*IH*f];
+}
+function hitPoint(cx,cy){
+  let best=null,bd=26;
+  s.chains.forEach((ch,ci)=>ch.forEach((q,pi)=>{const[x,y]=imgToRef(q),d=Math.hypot(x-cx,y-cy);if(d<bd){bd=d;best=[ci,pi]}}));
+  return best;
+}
+function tapPoint(hit,cx,cy){
+  if(!s.chains.length){s.chains=[[]];s.chain=0}
+  if(!hit){s.chains[s.chain].push(refToImg(cx,cy));return}
+  // Tapping a point selects its chain; removing happens only in delete mode
+  s.chain=hit[0];
+}
+// Circles are [cx, cy, r] with the center normalized to the image and r as a fraction of the image width
+let tool='pts';
+const refPx=()=>refFit()*s.rz*IW;
+function hitCircle(cx,cy){
+  let best=null,bd=26;
+  s.circles.forEach(([x,y,rr],i)=>{
+    const[px,py]=imgToRef([x,y]),R=rr*refPx();
+    const dc=Math.hypot(px-cx,py-cy),dr=Math.hypot(px+R-cx,py-cy);
+    if(dr<bd){bd=dr;best={type:'size',i}}
+    if(dc<bd){bd=dc;best={type:'move',i}}
+  });
+  return best;
+}
+function dragCircle(cx,cy){
+  if(cdrag.type==='new'){
+    if(cdrag.i===undefined){s.circles.push([...refToImg(cdrag.sx,cdrag.sy),0]);cdrag.i=s.circles.length-1}
+    s.circles[cdrag.i][2]=Math.hypot(cx-cdrag.sx,cy-cdrag.sy)/refPx();
+  }else if(cdrag.type==='move'){const c=s.circles[cdrag.i],[x,y]=refToImg(cx,cy);c[0]=x;c[1]=y}
+  else{const c=s.circles[cdrag.i],[px,py]=imgToRef(c);c[2]=Math.hypot(cx-px,cy-py)/refPx()}
+}
+// A newly drawn circle too small to see (e.g. a slip of the finger) is discarded.
+// Only the circle just drawn is checked, so existing circles never disappear when the view is zoomed out.
+function dropTinyCircle(i){if(i!==undefined&&s.circles[i]&&s.circles[i][2]*refPx()<6)s.circles.splice(i,1)}
+function setTool(t2){
+  tool=t2;document.body.classList.toggle('toolcircle',tool==='circle');
+  $('tooltog').textContent=tool==='circle'?'○ Circles':'• Points';drawPts();
+}
+$('tooltog').onclick=()=>setTool(tool==='pts'?'circle':'pts');
+
+// Several independent chains, each with its own color and letter; every segment's ratio is
+// relative to the first segment of the first chain, so proportions compare across chains
+const CHAIN_COLORS=['#ffd84d','#4dd2ff','#ff7ad9','#9dff6b','#ffa94d','#c4b5fd'];
+// u = image pixels per screen pixel in that view, so marks keep a constant on-screen size
+function ptsSVG(u,showActive){
+  const C=s.chains.map(ch=>ch.map(([x,y])=>[x*IW,y*IH]));
+  // Baseline: the first segment of chain A; ratios are shown only when it exists and ratios are switched on
+  const A=C[0],first=s.ratios&&A?.length>1?Math.hypot(A[1][0]-A[0][0],A[1][1]-A[0][1]):0;
+  let h='';
+  // Circles, labelled with their diameter relative to the reference segment
+  s.circles.forEach(([x,y,rr])=>{
+    const X=x*IW,Y=y*IH,R=rr*IW;
+    h+=`<circle class="circs" cx="${X}" cy="${Y}" r="${R}" stroke-width="${4*u}"/><circle class="circ" cx="${X}" cy="${Y}" r="${R}" stroke-width="${2*u}"/>`;
+    if(first)h+=`<text fill="#fff" x="${X+4*u}" y="${Y-R-6*u}" font-size="${13*u}" stroke-width="${3*u}">⌀${+(2*R/first).toFixed(2)}</text>`;
+    if(showActive&&tool==='circle')h+=`<circle class="handle" cx="${X}" cy="${Y}" r="${5*u}" stroke-width="${1.5*u}"/><circle class="handle" cx="${X+R}" cy="${Y}" r="${6*u}" stroke-width="${1.5*u}"/>`;
+  });
+  C.forEach((P2,ci)=>{
+    const col=CHAIN_COLORS[ci%CHAIN_COLORS.length],L=String.fromCharCode(65+ci%26),act=showActive&&tool==='pts'&&ci===s.chain;
+    for(let i=1;i<P2.length;i++){
+      const[a,b]=P2[i-1],[c,d]=P2[i],len=Math.hypot(c-a,d-b);
+      h+=`<line class="segs" x1="${a}" y1="${b}" x2="${c}" y2="${d}" stroke-width="${(act?5:4)*u}"/><line class="seg" stroke="${col}" x1="${a}" y1="${b}" x2="${c}" y2="${d}" stroke-width="${(act?3:2)*u}"/>`;
+      const txt=first?(+(len/first).toFixed(2)).toString():'';
+      h+=`<text fill="${col}" x="${(a+c)/2+8*u}" y="${(b+d)/2-8*u}" font-size="${13*u}" stroke-width="${3*u}">${txt}</text>`;
+    }
+    P2.forEach(([x,y],i)=>{
+      h+=`<circle class="dot" fill="${col}" cx="${x}" cy="${y}" r="${(act?8:7)*u}" stroke-width="${2*u}"/>`;
+      h+=`<text x="${x+10*u}" y="${y+16*u}" font-size="${14*u}" stroke-width="${3*u}">${L}${i+1}</text>`;
+    });
+  });
+  return h;
+}
+function drawPts(){
+  if(!IW)return;
+  if(s.showPts)$('ptsov').innerHTML=ptsSVG(IW/(FW*Math.max(.001,s.scale)));
+  if(document.body.classList.contains('solo'))$('ptsref').innerHTML=s.refPts||editing?ptsSVG(1/(refFit()*s.rz),editing):'';
+  const rm=$('refmarks');rm.classList.toggle('on',s.refPts);rm.setAttribute('aria-pressed',s.refPts);
+  rm.textContent=!s.refPts?'○ Marks off':s.ratios?'◉ Marks + ratios':'◉ Marks';
+  $('ptsnew').disabled=!s.chains.length||!s.chains[s.chain]?.length;
+}
+function setEditing(on){
+  editing=on;document.body.classList.toggle('ptsedit',on);
+  // Leaving edit mode drops empty chains
+  if(!on){setDelMode(false);s.chains=s.chains.filter(c=>c.length);s.chain=Math.min(s.chain,Math.max(0,s.chains.length-1));save()}
+  $('ptsedit').classList.toggle('on',on);$('ptsedit').textContent=on?'✓ Done':'✎ Edit';drawPts();
+}
+$('ptsedit').onclick=()=>setEditing(!editing);
+// Cycles: marks with ratios → marks only → off. The ratio setting also applies to marks on the overlay.
+$('refmarks').onclick=()=>{
+  if(s.refPts&&s.ratios)s.ratios=false;else if(s.refPts)s.refPts=false;else{s.refPts=true;s.ratios=true}
+  drawPts();save();
+};
+let delMode=false;
+function setDelMode(on){
+  delMode=on;document.body.classList.toggle('ptsdel',on);
+  $('ptsdel').classList.toggle('on',on);$('ptsdel').setAttribute('aria-pressed',on);drawPts();
+}
+$('ptsdel').onclick=()=>setDelMode(!delMode);
+// Remove what is under (cx, cy): a point first, then a circle (its ring or center), then a whole chain (one of its lines)
+function deleteAt(cx,cy){
+  const hp=hitPoint(cx,cy);
+  if(hp){
+    const[ci,pi]=hp;s.chains[ci].splice(pi,1);
+    if(!s.chains[ci].length){s.chains.splice(ci,1);s.chain=Math.min(s.chain,Math.max(0,s.chains.length-1))}
+    return;
+  }
+  const ci=s.circles.findIndex(([x,y,rr])=>{const[px,py]=imgToRef([x,y]),d=Math.hypot(px-cx,py-cy);return d<22||Math.abs(d-rr*refPx())<22});
+  if(ci>=0){s.circles.splice(ci,1);return}
+  const segDist=(a,b)=>{const[ax,ay]=imgToRef(a),[bx,by]=imgToRef(b),dx=bx-ax,dy=by-ay,l=dx*dx+dy*dy||1,u=Math.max(0,Math.min(1,((cx-ax)*dx+(cy-ay)*dy)/l));return Math.hypot(ax+u*dx-cx,ay+u*dy-cy)};
+  const chi=s.chains.findIndex(ch=>ch.some((q,i)=>i>0&&segDist(ch[i-1],q)<20));
+  if(chi>=0){s.chains.splice(chi,1);s.chain=Math.min(s.chain,Math.max(0,s.chains.length-1))}
+}
+$('ptsnew').onclick=()=>{s.chains.push([]);s.chain=s.chains.length-1;drawPts();save()};
+// Undo removes the last point of the active chain; an empty chain is removed and the previous one becomes active
+$('ptsundo').onclick=()=>{
+  if(tool==='circle'){s.circles.pop();drawPts();save();return}
+  const ch=s.chains[s.chain];if(!ch)return;
+  if(ch.length)ch.pop();
+  if(!ch.length&&s.chains.length>1){s.chains.splice(s.chain,1);s.chain=Math.max(0,s.chain-1)}
+  drawPts();save();
+};
+$('ptsclear').onclick=()=>{s.chains=[];s.chain=0;s.circles=[];drawPts();save()};
+$('ptsb').onclick=()=>{s.showPts=!s.showPts;syncUI();drawPts();save()};
+addEventListener('resize',drawPts);
+
+// Crop screen. The crop box is edited in normalized coordinates of the original image (cr).
+// A small preview of the original is shown to keep memory low.
+let cr=null,cropURL=null,cropFresh=false,cg=null;
+const cropimg=$('cropimg'),cropbox=$('cropbox');
+async function openCrop(fresh){
+  if(!origBlob)return;
+  cropFresh=fresh;cr=[...s.crop];
+  const u=URL.createObjectURL(origBlob);let im;
+  try{im=await loadImg(u)}catch(e){URL.revokeObjectURL(u);return}
+  const k=Math.min(1,1600/Math.max(im.naturalWidth,im.naturalHeight)),c=document.createElement('canvas');
+  c.width=Math.round(im.naturalWidth*k);c.height=Math.round(im.naturalHeight*k);
+  c.getContext('2d').drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);
+  const b=await new Promise(r=>c.toBlob(r,'image/jpeg',.9));c.width=c.height=0;
+  if(cropURL)URL.revokeObjectURL(cropURL);cropURL=URL.createObjectURL(b);
+  cropimg.onload=drawCrop;cropimg.src=cropURL;
+  $('crop').hidden=false;
+}
+function closeCrop(){
+  $('crop').hidden=true;cropimg.removeAttribute('src');
+  if(cropURL){URL.revokeObjectURL(cropURL);cropURL=null}
+}
+// Image rectangle inside the crop stage, in stage coordinates
+function cropRect(){const a=cropimg.getBoundingClientRect(),b=$('cropstage').getBoundingClientRect();return{x:a.left-b.left,y:a.top-b.top,w:a.width,h:a.height,ox:b.left,oy:b.top}}
+function drawCrop(){
+  const R=cropRect();
+  Object.assign(cropbox.style,{left:R.x+cr[0]*R.w+'px',top:R.y+cr[1]*R.h+'px',width:cr[2]*R.w+'px',height:cr[3]*R.h+'px'});
+}
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v)),MINC=.05;
+$('cropstage').addEventListener('pointerdown',e=>{
+  const R=cropRect(),px=(e.clientX-R.ox-R.x)/R.w,py=(e.clientY-R.oy-R.y)/R.h;
+  const tol=34/R.w,toly=34/R.h,[x,y,w,h]=cr;
+  const nx=Math.abs(px-x)<tol?'l':Math.abs(px-(x+w))<tol?'r':'',ny=Math.abs(py-y)<toly?'t':Math.abs(py-(y+h))<toly?'b':'';
+  let mode;
+  if(nx&&ny)mode=ny+nx;                               // corner handle
+  else if(px>x&&px<x+w&&py>y&&py<y+h)mode='move';     // inside the box
+  else mode='new';                                    // outside: draw a new box from here
+  cg={mode,px,py,c:[...cr],R};$('cropstage').setPointerCapture(e.pointerId);
+});
+$('cropstage').addEventListener('pointermove',e=>{
+  if(!cg)return;
+  const{R,c}=cg,px=clamp((e.clientX-R.ox-R.x)/R.w,0,1),py=clamp((e.clientY-R.oy-R.y)/R.h,0,1);
+  let[x,y,w,h]=c;
+  if(cg.mode==='move'){x=clamp(c[0]+px-cg.px,0,1-w);y=clamp(c[1]+py-cg.py,0,1-h)}
+  else if(cg.mode==='new'){const ax=clamp(cg.px,0,1),ay=clamp(cg.py,0,1);x=Math.min(ax,px);y=Math.min(ay,py);w=Math.abs(px-ax);h=Math.abs(py-ay)}
+  else{
+    let x2=c[0]+c[2],y2=c[1]+c[3];
+    if(cg.mode.includes('l'))x=Math.min(px,x2-MINC);
+    if(cg.mode.includes('r'))x2=Math.max(px,x+MINC);
+    if(cg.mode.includes('t'))y=Math.min(py,y2-MINC);
+    if(cg.mode.includes('b'))y2=Math.max(py,y+MINC);
+    w=x2-x;h=y2-y;
+  }
+  cr=[x,y,w,h];drawCrop();
+});
+const cropUp=()=>{if(cg?.mode==='new'&&(cr[2]<MINC||cr[3]<MINC))cr=[...cg.c];cg=null;drawCrop()};
+$('cropstage').addEventListener('pointerup',cropUp);$('cropstage').addEventListener('pointercancel',cropUp);
+addEventListener('resize',()=>{if(!$('crop').hidden)drawCrop()});
+$('cropfull').onclick=()=>{cr=[0,0,1,1];drawCrop()};
+$('cropcancel').onclick=closeCrop;
+$('cropdone').onclick=()=>{applyCrop(cr);closeCrop()};
+$('cropb').onclick=()=>openCrop(false);
+// Changing the crop keeps marks on the same image content and keeps the overlay content at the same size on screen
+function applyCrop(n){
+  const o=s.crop;
+  if(n.every((v,i)=>Math.abs(v-o[i])<1e-4))return;
+  const toNew=([px,py])=>[(o[0]+px*o[2]-n[0])/n[2],(o[1]+py*o[3]-n[1])/n[3]],inside=([x,y])=>x>=0&&x<=1&&y>=0&&y<=1;
+  s.chains=s.chains.map(ch=>ch.map(toNew).filter(inside)).filter(ch=>ch.length);s.chain=Math.min(s.chain,Math.max(0,s.chains.length-1));
+  s.circles=s.circles.map(([x,y,rr])=>[...toNew([x,y]),rr*o[2]/n[2]]).filter(c=>inside(c));
+  // Screen size of the content: FW*s.scale covers o[2] of the original width; FW is recomputed from the new crop
+  const content=FW*s.scale/o[2],oldFW=FW;
+  s.crop=[...n];setRef(1,0,0);
+  showImage(origBlob,cropFresh).then(()=>{if(!cropFresh&&oldFW){s.scale=content*n[2]/FW;draw()}});
+  save();
+}
+
+// Rotation and tilts snap to zero within ±3°; the 0° button centers them
+const snap=a=>Math.abs(a)<3?0:a;
+const deg=v=>Math.round(v)+'°';
+// Queue zoom changes so the camera is not reopened concurrently while dragging
+let zBusy=false,zNext=null;
+async function queueZoom(z){
+  s.zoom=zNext=z;if(zBusy)return;zBusy=true;
+  try{while(zNext!=null){const n=zNext;zNext=null;await setZoom(n)}}catch(e){}finally{zBusy=false}
+}
+// Adjustments: one at a time on the vertical slider (log = logarithmic scale)
+const P={
+  edge:{g:'op',name:'Outline',min:()=>5,max:()=>150,get:()=>s.edge,set:v=>{s.edge=Math.round(v);applyStyle();refOutlineStale=true;save()},fmt:v=>Math.round(v)+''},
+  op:{g:'op',name:'Opacity',min:()=>0,max:()=>100,get:()=>s.op*100,set:v=>{s.op=Math.round(v)/100;ov.style.opacity=s.op;save()},fmt:v=>Math.round(v)+'%'},
+  zoom:{g:'cam',name:'Zoom',min:()=>minZoom(),max:()=>10,log:1,get:()=>s.zoom,set:v=>queueZoom(Math.round(v*10)/10),fmt:v=>v.toFixed(1)+'×'},
+  scale:{g:'ov',name:'Size',min:()=>2,max:()=>400,log:1,get:()=>s.scale*100,set:v=>{s.scale=v/100;draw()},fmt:v=>Math.round(v)+'%'},
+  rot:{g:'ov',name:'Rotate',min:()=>-180,max:()=>180,zero:1,get:()=>s.rot,set:v=>{s.rot=snap(Math.round(v));draw()},fmt:deg},
+  tx:{g:'ov',name:'Tilt ↕',min:()=>-70,max:()=>70,zero:1,get:()=>s.tx,set:v=>{s.tx=snap(Math.round(v));draw()},fmt:deg},
+  ty:{g:'ov',name:'Tilt ↔',min:()=>-70,max:()=>70,zero:1,get:()=>s.ty,set:v=>{s.ty=snap(Math.round(v));draw()},fmt:deg},
+};
+let cur=null;
+const vs=$('vs'),vt=$('vstrack');
+function frac(p,v){const a=p.min(),b=p.max();v=Math.min(b,Math.max(a,v));return p.log?Math.log(v/a)/Math.log(b/a):(v-a)/(b-a)}
+function val(p,f){f=Math.min(1,Math.max(0,f));const a=p.min(),b=p.max();return p.log?a*Math.pow(b/a,f):a+f*(b-a)}
+// Landscape phone: horizontal slider (see the CSS media query); otherwise vertical
+const horizQ=matchMedia('(orientation:landscape) and (max-height:520px)');
+const horiz=()=>horizQ.matches;
+const trackLen=()=>(horiz()?vt.clientWidth:vt.clientHeight)-28;
+function refreshVS(){
+  if(!cur)return;
+  const p=P[cur],v=p.get(),L=trackLen(),th=$('vsthumb'),zr=$('vszero'),fl=$('vsfill');
+  zr.hidden=!p.zero;$('vsval').textContent=p.fmt(v);
+  if(horiz()){
+    const x=f=>14+f*L,tx=x(frac(p,v)),base=p.zero?x(frac(p,0)):14;
+    th.style.top='';th.style.left=tx+'px';zr.style.top='';zr.style.left=base+'px';
+    fl.style.top='';fl.style.height='';fl.style.left=Math.min(tx,base)+'px';fl.style.width=Math.abs(base-tx)+'px';
+  }else{
+    const y=f=>14+(1-f)*L,ty=y(frac(p,v)),base=p.zero?y(frac(p,0)):vt.clientHeight-14;
+    th.style.left='';th.style.top=ty+'px';zr.style.left='';zr.style.top=base+'px';
+    fl.style.left='';fl.style.width='';fl.style.top=Math.min(ty,base)+'px';fl.style.height=Math.abs(base-ty)+'px';
+  }
+}
+horizQ.addEventListener?.('change',refreshVS);
+const menu=$('menu');
+function openMenu(on){menu.hidden=!on;$('vsmenu').classList.toggle('on',on);$('vsmenu').setAttribute('aria-expanded',on)}
+function pick(k){
+  // Outline detail is only available in outline style
+  if(k==='edge'&&s.style!=='outline')k='op';
+  cur=s.param=P[k]?k:'op';save();
+  for(const b of $('mparams').querySelectorAll('[data-p]'))b.classList.toggle('on',b.dataset.p===cur);
+  $('vsname').textContent=P[cur].name;$('vs0').hidden=!P[cur].zero;
+  vs.className='g-'+P[cur].g;$('vslock').hidden=P[cur].g==='op';syncLocks();
+  // Camera zoom presets are shown only for the zoom adjustment
+  $('bar').hidden=cur!=='zoom';
+  refreshVS();
+}
+for(const b of $('mparams').querySelectorAll('[data-p]'))b.onclick=()=>{pick(b.dataset.p);openMenu(false)};
+$('vsmenu').onclick=()=>openMenu(menu.hidden);
+// A tap outside a menu closes it
+addEventListener('pointerdown',e=>{
+  if(!menu.hidden&&!menu.contains(e.target)&&!$('vsmenu').contains(e.target))openMenu(false);
+  if(!more.hidden&&!more.contains(e.target)&&!$('moreb').contains(e.target))openMore(false);
+});
+const more=$('more');
+function openMore(on,settings){
+  more.hidden=!on;$('mmain').hidden=!!settings;$('msettings').hidden=!settings;
+  $('moreb').classList.toggle('on',on);$('moreb').setAttribute('aria-expanded',on);
+}
+$('moreb').onclick=()=>openMore(more.hidden);
+// Close camera: stops the stream (saves battery, turns off the camera light); the overlay stays on a dark background
+$('camb').onclick=async()=>{
+  openMore(false);
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;track=null;v.srcObject=null;$('camb').textContent='Open camera';syncTorch()}
+  else{try{await startCam();$('camb').textContent='Close camera'}catch(e){}}
+};
+// Clear: removes the stored image, marks and all settings, then starts fresh
+$('clearall').onclick=async()=>{
+  if(!confirm('Remove the image, marks and all settings?'))return;
+  clearTimeout(saveT);
+  try{await idb('readwrite',st=>st.clear())}catch(e){}
+  location.reload();
+};
+$('pickimg').onclick=()=>{openMore(false);$('file').click()};
+$('opensettings').onclick=()=>openMore(true,true);
+$('mback').onclick=()=>openMore(true,false);
+$('vshide').onclick=()=>{const h=document.body.classList.toggle('novs');$('vshide').classList.toggle('on',!h);$('vshide').setAttribute('aria-pressed',!h);openMenu(false)};
+$('sideb').onclick=()=>{s.side=s.side==='left'?'right':'left';syncUI();save()};
+$('btnposb').onclick=()=>{s.btnpos=s.btnpos==='bottom'?'top':'bottom';syncUI();save()};
+$('vs0').onclick=()=>{if(!groupLocked(P[cur].g)){P[cur].set(0);refreshVS()}};
+// Dragging is relative: the thumb does not jump to the touch point, which allows fine adjustment
+let drag=null;
+vt.addEventListener('pointerdown',e=>{
+  if(!cur||groupLocked(P[cur].g))return;vt.setPointerCapture(e.pointerId);
+  drag={x:e.clientX,y:e.clientY,f:frac(P[cur],P[cur].get())};
+});
+vt.addEventListener('pointermove',e=>{
+  if(!drag)return;
+  const p=P[cur],d=horiz()?(e.clientX-drag.x):-(e.clientY-drag.y);
+  p.set(val(p,drag.f+d/trackLen()));refreshVS();
+});
+vt.addEventListener('pointerup',()=>drag=null);vt.addEventListener('pointercancel',()=>drag=null);
+// Keep the slider above the bottom bar
+new ResizeObserver(()=>{document.documentElement.style.setProperty('--barh',$('bar').offsetHeight+'px');refreshVS()}).observe($('bar'));
+addEventListener('resize',refreshVS);
+$('flip').onclick=e=>{s.flip*=-1;e.target.classList.toggle('on',s.flip<0);draw()};
+// Separate locks for the camera (zoom) and the overlay image (move, size, rotation, tilt, mirror); opacity is never locked
+// Lock icon shackle: open or closed
+const LOCK_OPEN='M8 10.5V7a4 4 0 0 1 7.6-1.7',LOCK_CLOSED='M8 10.5V7a4 4 0 0 1 8 0v3.5';
+const groupLocked=g=>g==='cam'?s.lockCam:g==='ov'?s.lockOv:false;
+function setLock(g,on){if(g==='cam')s.lockCam=on;else s.lockOv=on;syncLocks();save()}
+function syncLocks(){
+  const mark=(b,on)=>{b.querySelector('path').setAttribute('d',on?LOCK_CLOSED:LOCK_OPEN);b.classList.toggle('on',on);b.setAttribute('aria-pressed',on)};
+  mark($('lock'),s.lockOv);
+  for(const b of document.querySelectorAll('.glock'))mark(b,groupLocked(b.dataset.g));
+  for(const z of $('zooms').children)z.disabled=s.lockCam;
+  $('flip').disabled=s.lockOv;
+  if(cur){const l=groupLocked(P[cur].g);vs.classList.toggle('locked',l);mark($('vslock'),l);$('vs0').disabled=l}
+}
+$('lock').onclick=()=>setLock('ov',!s.lockOv);
+for(const b of document.querySelectorAll('.glock'))b.onclick=()=>setLock(b.dataset.g,!groupLocked(b.dataset.g));
+$('vslock').onclick=()=>setLock(P[cur].g,!groupLocked(P[cur].g));
+$('gridb').onclick=()=>{const on=!grid.toggleAttribute('hidden');$('gridb').classList.toggle('on',on);$('gridb').setAttribute('aria-pressed',on)};
+
+// Touch gestures: one finger moves, two fingers scale and rotate
+// Movable while the image, the grid or the reference marks are visible (marks alone are enough when the image is hidden)
+const editable=()=>(ov.src&&!ov.hidden)||!grid.hasAttribute('hidden')||(s.showPts&&(s.chains.length>0||s.circles.length>0));
+const pts=new Map();let g=null;
+const stage=$('stage');
+function snapshot(){
+  const a=[...pts.values()];
+  if(a.length===1)g={type:1,px:a[0].x,py:a[0].y,x:s.x,y:s.y};
+  else if(a.length>=2){const[p,q]=a;g={type:2,d:Math.hypot(q.x-p.x,q.y-p.y),ang:Math.atan2(q.y-p.y,q.x-p.x),cx:(p.x+q.x)/2,cy:(p.y+q.y)/2,scale:s.scale,rot:s.rot,x:s.x,y:s.y}}
+  else g=null;
+}
+stage.addEventListener('pointerdown',e=>{if(s.lockOv||!editable())return;stage.setPointerCapture(e.pointerId);pts.set(e.pointerId,{x:e.clientX,y:e.clientY});snapshot()});
+stage.addEventListener('pointermove',e=>{
+  if(!pts.has(e.pointerId)||!g)return;
+  pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  const a=[...pts.values()];
+  if(g.type===1&&a.length===1){s.x=g.x+a[0].x-g.px;s.y=g.y+a[0].y-g.py}
+  else if(g.type===2&&a.length>=2){const[p,q]=a;
+    s.scale=Math.max(.05,g.scale*Math.hypot(q.x-p.x,q.y-p.y)/g.d);
+    s.rot=g.rot+(Math.atan2(q.y-p.y,q.x-p.x)-g.ang)*180/Math.PI;
+    s.rot=snap(((s.rot+540)%360)-180);
+    s.x=g.x+(p.x+q.x)/2-g.cx;s.y=g.y+(p.y+q.y)/2-g.cy}
+  draw();
+});
+const up=e=>{pts.delete(e.pointerId);snapshot()};
+stage.addEventListener('pointerup',up);stage.addEventListener('pointercancel',up);
+// Mouse wheel on desktop
+stage.addEventListener('wheel',e=>{if(s.lockOv||!editable())return;e.preventDefault();s.scale=Math.max(.05,s.scale*(e.deltaY<0?1.08:0.93));draw()},{passive:false});
+// Installable app: offline support via the service worker
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+// Start straight away when camera access is already granted; otherwise the start screen asks first
+(async()=>{try{if((await navigator.permissions?.query({name:'camera'}))?.state==='granted')$('go').click()}catch(e){}})();
+</script>
+</body>
+</html>
