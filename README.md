@@ -38,7 +38,7 @@ In Safari open the page, tap Share, then **Add to Home Screen**. The installed a
 
 ## Structure
 
-The app itself is a single file, `index.html` (HTML, CSS and JS, no dependencies). `manifest.webmanifest`, `sw.js` and `icons/` make it installable and available offline.
+The app itself is a single file, `index.html` (HTML, CSS and JS, no dependencies). `manifest.webmanifest`, `sw.js` and `icons/` make it installable and available offline. See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works.
 
 ## License
 
